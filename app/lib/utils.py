@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 from datetime import datetime
 import requests, os, re, json, time
 import pandas as pd
@@ -6,8 +7,8 @@ from os import listdir
 from os.path import isfile, join
 from tqdm import tqdm
 
-def read_episoden_to_json(show_name):
-    f = open("out/"+show_name+"/episoden.json",encoding='utf-8')
+def read_episoden_to_json(show_name, local_folder):
+    f = open(local_folder+show_name+"/episoden.json",encoding='utf-8')
     j = json.load(f)
     f.close()
         
@@ -240,3 +241,115 @@ def write_df_to_db(table_name, df, constr):
     df.to_sql(table_name, e, if_exists='replace', index = True)
 
     return 1
+
+
+def plot_time_evolution(df_episoden, df_gaeste, filter_sendung):
+
+    d = {}
+    for y in range(2010,2024):
+        start_date = datetime(y, 1, 1)
+        end_date = datetime(y+1, 12, 31)
+
+        df = df_episoden.merge(df_gaeste, how = "left", on = ["name"])
+        mask = (df['datum'] > start_date) & (df['datum'] <= end_date)
+        if not(filter_sendung.lower() == "alle"):
+            df = df[df["sendung"] == filter_sendung]
+        df = df.sort_values(by=['datum'], ascending=True)
+        df = df.loc[mask]
+        if len(df) == 0:
+            print(y)
+            continue
+
+        df_dummy = df[df["partei"].str.len()>0]
+        parteien = list(set(df_dummy["partei"].to_list()))
+        c = []
+        for partei in parteien:
+            c.append(100 * len(df[df["partei"] == partei])/len(df_dummy))
+
+        
+        labels = parteien
+        c = [100*e/sum(c) for e in c]
+
+        for partei, partei_count in zip(labels, c):
+            if not partei in d:
+                d[partei] = {}
+                d[partei]["t"] = []
+                d[partei]["c"] = []
+            d[partei]["t"].append(y)
+            d[partei]["c"].append(partei_count)
+
+
+    # https://matplotlib.org/stable/gallery/color/named_colors.html
+    color_vec = {}
+    color_vec["SPD"] = "r"
+    color_vec["Grüne"] = "g"
+    color_vec["FDP"] = "y"
+    color_vec["CDU"] = "k"
+    color_vec["CSU"] = "cyan"
+    color_vec["AFD"] = "b"
+    color_vec["Linke"] = "m"
+    fig = plt.figure()
+    for k, v in d.items():
+        if k.count(",")>0:
+            continue
+        if k in color_vec:
+            c = color_vec[k]
+        else:
+            c = "k"
+        plt.plot(v["t"], v["c"], label = k, c = c, linewidth = 3)
+
+    plt.legend(loc="upper center", ncol=3)
+    #figure(figsize=(8, 6), dpi=800)
+    ax = plt.gca()
+    ax.set_xlim([2009, 2023])
+    ax.set_ylim([-1, 35])
+    fig.suptitle('Prozentualer Anteil eingeschränkt auf ' + filter_sendung, fontsize=20)
+    plt.xlabel('Jahr', fontsize=18)
+    plt.ylabel('%', fontsize=16)
+    plt.savefig('out/plots/zeitentwicklung__'+filter_sendung+'.pdf', bbox_inches = "tight")
+    plt.figure().clear()
+    plt.close()
+    plt.cla()
+    plt.clf()
+
+def prepare_df_for_eval_zeitentwicklung(l_show_name):
+    local_folder = r"C:\Users\oliver.koehn\Documents\talkshowsAuswerten\app\out\\"
+
+    episoden = []
+    for show_name in l_show_name:
+        
+        episoden.append(read_episoden_to_json(show_name, local_folder))
+
+    episoden = {k:v for element in episoden for k,v in element.items()}
+    df_episoden = episoden_to_df(episoden)
+    df_episoden["sendung"] = df_episoden["nummer"].str.split("__").str[-1]
+
+
+    j_gaeste = {}
+    liste_parteien = ["SPD", "Grüne", "FDP", "CDU", "CSU", "AFD", "Linke"]
+
+    for e in episoden:
+        for g in episoden[e]["gaeste"]:
+            if not(g["name"] in j_gaeste):
+                j_gaeste[g["name"]] = {}
+                j_gaeste[g["name"]]["beschreibung"] = []
+                j_gaeste[g["name"]]["partei"] = []
+            j_gaeste[g["name"]]["beschreibung"].append(g["beschreibung"])
+            j_gaeste[g["name"]]["beschreibung"] = list(set(j_gaeste[g["name"]]["beschreibung"]))
+            partei = []
+            for partei in liste_parteien:
+                if partei.lower() in g["beschreibung"].lower():
+                    j_gaeste[g["name"]]["partei"].append(partei)
+                    j_gaeste[g["name"]]["partei"] = list(set(j_gaeste[g["name"]]["partei"]))
+
+    l = []
+    for e in j_gaeste:
+        j_dummy = {}
+        j_dummy["name"] = e
+        j_dummy["beschreibung"] = ",".join(j_gaeste[e]["beschreibung"])
+        j_dummy["partei"] = ",".join(j_gaeste[e]["partei"])
+        l.append(j_dummy.copy())
+
+    df_gaeste = pd.DataFrame.from_records(l)
+
+    return df_episoden, df_gaeste
